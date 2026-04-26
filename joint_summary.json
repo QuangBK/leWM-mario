@@ -1,0 +1,98 @@
+[
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": "/root/auto_videos_joint/joint_ep_00.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 722,
+    "x_progress": 682,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": "/root/auto_videos_joint/joint_ep_01.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": "/root/auto_videos_joint/joint_ep_02.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 318,
+    "x_progress": 278,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 316,
+    "x_progress": 276,
+    "blocks_executed": 24,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 310,
+    "x_progress": 270,
+    "blocks_executed": 21,
+    "final_lives": 2,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 80,
+    "final_lives": 2,
+    "video": null
+  }
+]
