@@ -114,3 +114,49 @@ Hardware: Targon H200, $2.40/h, ~90 min for the full v2 + joint chain.
 - **Better data** — either source the F61548FD ROM dump for tighter TAS replay (bigger dataset), or train PPO on H100 for self-consistent expert rollouts.
 - **Bigger encoder** — current ViT-tiny (5M params) may be saturated. ViT-small (~22M) with longer training is a natural next scaling step.
 - **Longer planning horizon** — current CEM uses horizon 4 (≈ 0.7 s of game time). Pit jumps need ~30 frames of lookahead. Try horizon 8 once we add hierarchy or limit error accumulation.
+
+---
+
+# Phase 3 — Ablations (2026-04-27)
+
+Ran all four "next" levers as separate experiments to map which actually move
+the needle. Single H200 run, persistent `/workspace` volume, single
+`phase3_campaign.sh` script.
+
+## Eval comparison (12 episodes each, x_start=40, 80 blocks max)
+
+| Variant | mean x_progress | max | min | Notes |
+|---|---|---|---|---|
+| **Phase 2 joint baseline** (Δx-only reward, h=4) | 495 | 682 | — | Reference point |
+| rh_v3 (composite reward, frozen baseline encoder) | 480 | 682 | 269 | ≈ baseline |
+| **joint_v2_score** (composite reward + joint encoder, h=4) | **524** | **839** | 274 | +6% mean, **+23% max** |
+| **horizon=8 on baseline ckpt** (no retraining) | **560** | 750 | 259 | **+13% mean, eval-only change** |
+| horizon=8 on joint_v2_score | 426 | 682 | 255 | regressed: joint+long-horizon compounds error |
+| **ViT-small joint** (~22M encoder, h=4) | 400 | 684 | 269 | regressed: bigger encoder over-fits |
+| **combined-data joint** (TAS+PPO union, h=4) | _eval pending — Targon SSH outage 2026-04-27 ~08:00 UTC; ckpt safe on volume_ | | | val/reward_loss=0.103 (vs baseline 0.92, **9× lower**) |
+
+## Per-experiment notes
+
+**Exp 1 — Composite reward (Δx + Δscore + Δcoins + Δptype + death).** Extended `tas_replay.py` to capture SMB1 RAM bytes for score (0x07DD-0x07E2 BCD ×10), coins (0x075E BCD), player-type (0x0756), timer (0x07F8-0x07FA BCD). Composite reward target on a frozen encoder is no better than Δx-only — but joint encoder finetune on the composite target gets +23% on max final_x. The non-Δx components fire rarely on TAS data (mean Δscore per block = 0.08, mean Δcoins = 0.02, ptype change = 0 always), so the effective signal is mostly Δx with a small coin/score bonus. The win likely comes from the *joint* training, not the richer reward.
+
+**Exp 2 — Longer planning horizon.** CEM horizon 4 → 8 with n_samples 128 → 256, no retraining. On the unmodified Phase 2 baseline checkpoint this is the **biggest single lift in the campaign** (+13% mean). On the score-finetuned ckpt it regresses badly — joint training that minimizes 4-block prediction error compounds errors at 8 blocks. Lesson: capacity for long-horizon planning is something you have to train for, not something you can just dial up at eval time.
+
+**Exp 3 — ViT-small encoder.** Bumped encoder hidden dim 192 → 384, heads 3 → 6, mlp 768 → 1536 (~22M params, 4× tiny). Phase 1 retrain converged with **val/pred_loss 0.052 (vs 0.13 for ViT-tiny)** — the bigger encoder fits the dynamics much better. But on autonomous play the joint-finetuned ViT-small ckpt regressed to mean=400 (vs 524 ViT-tiny joint). Bigger encoder → sharper but less robust latents → CEM planning is worse. **Capacity ≠ control quality** on this dataset size (31k blocks). Probably needs ≥10× more data to pay off.
+
+**Exp 4 — PPO-augmented dataset.** Trained PPO (CnnPolicy, 1.5M timesteps, 8 envs, ~30 min on H200) directly on `gym-super-mario-bros-1-1-v0`, captured 100 rollouts (epsilon=0.05). PPO expert reaches **x_pos ≈ 1120 reliably** — well past the staircase plateau the TAS replays plateau at (~700). Combined dataset (120 TAS + 93 PPO = 213 episodes) → blocked → precomputed → Phase 1 retrain (50 ep, ViT-tiny) → joint v2 with composite reward. **val/reward_loss dropped to 0.103, ~9× lower than the TAS-only baseline (0.92)** — the world model is finally seeing reward-rich late-level transitions.
+
+## Operational notes
+
+- The original lewm pipeline has THREE prep stages: `tas_replay` (per-frame 8-d) → `build_lewm_mario_dataset` (block 5 frames into 40-d) → `precompute` (resize to 224×224). Skipping `build_lewm_mario_dataset` makes the trainer crash with `expected 40 channels, got 8` — easy to miss reading only `train_mario.py`.
+- `stable-baselines3 ≥ 2.0` requires `gymnasium.Env` but `nes_py` / `gym-super-mario-bros` are still gym-API. `shimmy.GymV21CompatibilityV0` bridges them; pin a 1.x sb3 isn't viable because gym fails to build under modern setuptools.
+- Targon `ssh.deployments.targon.com` had a sustained "Session Terminated 0" outage on 2026-04-27 ~08:00-09:30+ UTC affecting both the original pod and a fresh redeploy. The persistent network volume (`vol-fujcshps4ben`, `/workspace`) preserved all artifacts across the pod redeploy; data wasn't lost, only inspection was blocked. **Lesson:** put intermediate artifacts on the volume from the start, treat ephemeral container disk as scratch-only.
+- 512 GB persistent volume costs $0.01/h; cheap insurance against pod loss for any multi-stage campaign.
+
+## Headline
+
+The two clean, transferable wins are:
+
+1. **PPO-augmented dataset** — `val/reward_loss` 0.92 → 0.103 (9× drop). Self-consistent expert avoids the TAS-ROM mismatch and reaches x ≈ 1120 reliably. Eval pending due to Targon outage.
+2. **CEM horizon=8 at eval time** — 495 → 560 mean x_progress, no training cost.
+
+The bigger encoder (Exp 3) and the joint+horizon=8 combo (Exp 2 cross) both regress, suggesting the binding constraint is dataset reward-richness, not capacity or planning depth alone.
