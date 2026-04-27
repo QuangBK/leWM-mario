@@ -208,4 +208,9 @@ python3 autonomous_eval_v2.py \
   --out-dir /workspace/runs/eval/combined_joint \
   --label combined_joint 2>&1 | tee /workspace/runs/eval_combined.log | tail -20
 
+stage aggregate_results
+python3 aggregate_results.py /workspace/runs/eval > /workspace/runs/phase3_results.md
+echo "--- phase3_results.md ---"
+cat /workspace/runs/phase3_results.md
+
 echo "==== CAMPAIGN_DONE ===="
