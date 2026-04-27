@@ -133,7 +133,7 @@ the needle. Single H200 run, persistent `/workspace` volume, single
 | **horizon=8 on baseline ckpt** (no retraining) | **560** | 750 | 259 | **+13% mean, eval-only change** |
 | horizon=8 on joint_v2_score | 426 | 682 | 255 | regressed: joint+long-horizon compounds error |
 | **ViT-small joint** (~22M encoder, h=4) | 400 | 684 | 269 | regressed: bigger encoder over-fits |
-| **combined-data joint** (TAS+PPO union, h=4) | _eval pending — Targon SSH outage 2026-04-27 ~08:00 UTC; ckpt safe on volume_ | | | val/reward_loss=0.103 (vs baseline 0.92, **9× lower**) |
+| **combined-data joint** (TAS+PPO union, h=4) | _autonomous-play eval lost — see "Operational notes"_ | | | val/reward_loss=0.103 (vs baseline 0.92, **9× lower**) |
 
 ## Per-experiment notes
 
@@ -149,14 +149,16 @@ the needle. Single H200 run, persistent `/workspace` volume, single
 
 - The original lewm pipeline has THREE prep stages: `tas_replay` (per-frame 8-d) → `build_lewm_mario_dataset` (block 5 frames into 40-d) → `precompute` (resize to 224×224). Skipping `build_lewm_mario_dataset` makes the trainer crash with `expected 40 channels, got 8` — easy to miss reading only `train_mario.py`.
 - `stable-baselines3 ≥ 2.0` requires `gymnasium.Env` but `nes_py` / `gym-super-mario-bros` are still gym-API. `shimmy.GymV21CompatibilityV0` bridges them; pin a 1.x sb3 isn't viable because gym fails to build under modern setuptools.
-- Targon `ssh.deployments.targon.com` had a sustained "Session Terminated 0" outage on 2026-04-27 ~08:00-09:30+ UTC affecting both the original pod and a fresh redeploy. The persistent network volume (`vol-fujcshps4ben`, `/workspace`) preserved all artifacts across the pod redeploy; data wasn't lost, only inspection was blocked. **Lesson:** put intermediate artifacts on the volume from the start, treat ephemeral container disk as scratch-only.
-- 512 GB persistent volume costs $0.01/h; cheap insurance against pod loss for any multi-stage campaign.
+- Targon `ssh.deployments.targon.com` had a sustained "Session Terminated 0" outage on 2026-04-27 ~08:00-09:30 UTC affecting the running pod. When I deleted the broken pod and re-attached the same volume UID to a fresh pod, **Targon re-provisioned the underlying PVC instead of remounting the existing one** — the `last_backup_at` field on the volume was set in the same minute, suggesting the prior contents were snapshotted, but the API exposes no restore endpoint. All Phase 3 artifacts on the volume (combined-data Phase 1 ckpt, joint v2 ckpt, PPO model, eval JSONs, campaign log) were lost. **Lessons:** (1) attach the volume in the same `POST /workloads` body that creates the pod, never PATCH-then-restart; (2) push *every* completed-stage artifact to HF immediately, don't rely on the volume surviving a pod redeploy. The combined-data autonomous-play eval cell in the table above is permanently empty as a result.
+- 512 GB persistent volume costs $0.01/h; cheap as intended, but mount semantics on re-attach are surprising.
 
 ## Headline
 
-The two clean, transferable wins are:
+The clean, measurable wins are:
 
-1. **PPO-augmented dataset** — `val/reward_loss` 0.92 → 0.103 (9× drop). Self-consistent expert avoids the TAS-ROM mismatch and reaches x ≈ 1120 reliably. Eval pending due to Targon outage.
-2. **CEM horizon=8 at eval time** — 495 → 560 mean x_progress, no training cost.
+1. **CEM horizon=8 at eval time on the unmodified Phase 2 baseline ckpt** — 495 → 560 mean x_progress, no training cost. **Best confirmed result of the campaign.**
+2. **Composite-reward joint training** — 495 → 524 mean, max final_x 722 → 879. Modest but real.
 
-The bigger encoder (Exp 3) and the joint+horizon=8 combo (Exp 2 cross) both regress, suggesting the binding constraint is dataset reward-richness, not capacity or planning depth alone.
+The would-be biggest win — combining TAS replays with self-collected PPO rollouts — produced a 9× drop in `val/reward_loss` (0.92 → 0.103) on the held-out training split, but the autonomous-play eval was lost in a Targon storage hiccup before it could be measured. The training-side signal is strong enough that this is worth re-running on a future pod cycle if the question matters.
+
+The bigger encoder (Exp 3) and the joint+horizon=8 combo both regress, suggesting that on the current dataset size (~25k blocks) the binding constraint is **reward-richness in the data**, not capacity or planning depth alone.
