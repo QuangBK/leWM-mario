@@ -133,7 +133,7 @@ the needle. Single H200 run, persistent `/workspace` volume, single
 | **horizon=8 on baseline ckpt** (no retraining) | **560** | 750 | 259 | **+13% mean, eval-only change** |
 | horizon=8 on joint_v2_score | 426 | 682 | 255 | regressed: joint+long-horizon compounds error |
 | **ViT-small joint** (~22M encoder, h=4) | 400 | 684 | 269 | regressed: bigger encoder over-fits |
-| **combined-data joint** (TAS+PPO union, h=4) | _autonomous-play eval lost — see "Operational notes"_ | | | val/reward_loss=0.103 (vs baseline 0.92, **9× lower**) |
+| **combined-data joint** (TAS+PPO union, h=4) | 521 | 682 | 263 | val/reward_loss=0.083 (vs baseline 0.92, **11× lower**); **median 558 — best in campaign** |
 
 ## Per-experiment notes
 
@@ -156,9 +156,20 @@ the needle. Single H200 run, persistent `/workspace` volume, single
 
 The clean, measurable wins are:
 
-1. **CEM horizon=8 at eval time on the unmodified Phase 2 baseline ckpt** — 495 → 560 mean x_progress, no training cost. **Best confirmed result of the campaign.**
-2. **Composite-reward joint training** — 495 → 524 mean, max final_x 722 → 879. Modest but real.
+1. **CEM horizon=8 at eval time on the unmodified Phase 2 baseline ckpt** — 495 → 560 mean x_progress, no training cost. **Best mean of the campaign.**
+2. **Combined TAS+PPO data + joint v2** — val/reward_loss 0.92 → 0.083 (**11× lower**), and on autonomous play **mean 521, median 558 — best median in the campaign** (most episodes consistently reach the staircase). The training-side signal translates into smoother, more reliable performance rather than higher peak max — 9 of 12 episodes pass x=550 vs ~7 for the baseline.
+3. **Composite-reward joint training** — 495 → 524 mean, max final_x 722 → 879. Best peak max in the campaign.
 
-The would-be biggest win — combining TAS replays with self-collected PPO rollouts — produced a 9× drop in `val/reward_loss` (0.92 → 0.103) on the held-out training split, but the autonomous-play eval was lost in a Targon storage hiccup before it could be measured. The training-side signal is strong enough that this is worth re-running on a future pod cycle if the question matters.
+Three different wins, three different shapes:
+- Horizon=8: best **mean** (560)
+- Combined data: best **median** (558)
+- Composite reward: best **max** (839)
 
-The bigger encoder (Exp 3) and the joint+horizon=8 combo both regress, suggesting that on the current dataset size (~25k blocks) the binding constraint is **reward-richness in the data**, not capacity or planning depth alone.
+The bigger encoder (Exp 3) and the joint+horizon=8 combo both regress, suggesting that on the current dataset size (~50k blocks for the combined run, ~25k for the baseline) the binding constraint depends on what you measure: planning depth (mean), data-richness (median consistency), or reward shape (peak max).
+
+## Artifacts
+
+**Combined-data ckpts and videos (HF, private):** https://huggingface.co/obamaTeo/lewm-mario/tree/main/phase3
+- `phase3/combined_phase1_best.pt` (217 MB) — Phase 1 retrain on 210-episode TAS+PPO union
+- `phase3/combined_joint_best.pt` (73 MB) — joint v2 on combined data, val/loss=0.27
+- `phase3/eval_combined_joint/combined_joint_ep_0{0..3}.mp4` — 4 sample autonomous-play videos, 12-episode summary JSON
