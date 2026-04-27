@@ -30,6 +30,28 @@ RAM_PLAYER_STATE = 0x000E   # 0x06 = dying, 0x0B = dying-fall, 0x08 = climbing
 RAM_WORLD        = 0x075F   # world index (0-based)
 RAM_LEVEL        = 0x075C   # level index (0-based)
 RAM_FLAG_GET     = 0x001D   # nonzero when sliding flag
+# Score is 6 BCD digits at 0x07DD-0x07E2 (each byte 0-9). Multiply each by power
+# of 10 then by 10 (in-game score is the BCD value × 10). Top digits at 0x07DD.
+RAM_SCORE_LO     = 0x07DD
+RAM_SCORE_HI     = 0x07E2  # inclusive
+RAM_COINS        = 0x075E   # BCD, 0-99
+RAM_PLAYER_TYPE  = 0x0756   # 0=small, 1=big, 2=fire
+RAM_TIMER_HUNDR  = 0x07F8   # 100s digit BCD
+RAM_TIMER_TENS   = 0x07F9
+RAM_TIMER_ONES   = 0x07FA
+
+def _read_score(ram):
+    # 6 BCD digits, 0x07DD = highest, 0x07E2 = lowest. Game score = BCD × 10.
+    digits = [int(ram[a]) & 0x0F for a in range(RAM_SCORE_LO, RAM_SCORE_HI + 1)]
+    val = 0
+    for d in digits:
+        val = val * 10 + d
+    return val * 10
+
+def _read_timer(ram):
+    return (int(ram[RAM_TIMER_HUNDR]) & 0x0F) * 100 \
+         + (int(ram[RAM_TIMER_TENS])  & 0x0F) * 10  \
+         + (int(ram[RAM_TIMER_ONES])  & 0x0F)
 
 def read_state(env):
     ram = env.ram
@@ -40,6 +62,10 @@ def read_state(env):
         "world":   int(ram[RAM_WORLD]) + 1,
         "level":   int(ram[RAM_LEVEL]) + 1,
         "flag":    bool(ram[RAM_FLAG_GET]),
+        "score":   _read_score(ram),
+        "coins":   ((int(ram[RAM_COINS]) >> 4) & 0x0F) * 10 + (int(ram[RAM_COINS]) & 0x0F),
+        "ptype":   int(ram[RAM_PLAYER_TYPE]),
+        "timer":   _read_timer(ram),
     }
 
 def replay_one(fm2_path: Path, max_frames: int | None = None,
@@ -62,6 +88,10 @@ def replay_one(fm2_path: Path, max_frames: int | None = None,
     desync = None
     start_lives = None
     captured_started = False
+    score_series = []
+    coins_series = []
+    ptype_series = []
+    timer_series = []
 
     for t, row in enumerate(actions_2d):
         byte_action = fm2_row_to_nes_action(row)
@@ -94,6 +124,10 @@ def replay_one(fm2_path: Path, max_frames: int | None = None,
         actions_used.append(row)
         x_pos_series.append(st["x_pos"])
         lives_series.append(st["lives"])
+        score_series.append(st["score"])
+        coins_series.append(st["coins"])
+        ptype_series.append(st["ptype"])
+        timer_series.append(st["timer"])
 
         # Desync detection
         if st["lives"] < (start_lives or 0):
@@ -122,6 +156,10 @@ def replay_one(fm2_path: Path, max_frames: int | None = None,
         "actions": np.stack(actions_used, axis=0).astype(np.float32),
         "x_pos":   np.asarray(x_pos_series, dtype=np.int32),
         "lives":   np.asarray(lives_series, dtype=np.int8),
+        "score":   np.asarray(score_series, dtype=np.int32),
+        "coins":   np.asarray(coins_series, dtype=np.int16),
+        "ptype":   np.asarray(ptype_series, dtype=np.int8),
+        "timer":   np.asarray(timer_series, dtype=np.int16),
         "desync_reason": desync,
         "fm2_total": int(len(actions_2d)),
         "start_lives": int(start_lives),
@@ -191,6 +229,10 @@ def main():
             actions=out["actions"],
             x_pos=out["x_pos"],
             lives=out["lives"],
+            score=out["score"],
+            coins=out["coins"],
+            ptype=out["ptype"],
+            timer=out["timer"],
             metadata_json=json.dumps(meta),
         )
         rec = {"name": fm2.stem, "ok": True, "out": out_name, **meta}
