@@ -64,23 +64,25 @@ def read_state(env_unwrapped):
     }
 
 def make_train_env(n_envs: int, seed: int = 0):
-    """Vectorized training env: SuperMarioBros-1-1-v0 + SIMPLE_MOVEMENT + framestack."""
+    """Vectorized training env: SuperMarioBros-1-1-v0 + SIMPLE_MOVEMENT + framestack.
+    Uses shimmy.GymV21CompatibilityV0 to bridge gym (nes-py) → gymnasium (sb3 ≥2)."""
     import gym_super_mario_bros
     from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
     from nes_py.wrappers import JoypadSpace
+    from shimmy import GymV21CompatibilityV0
     from stable_baselines3.common.vec_env import SubprocVecEnv, VecFrameStack
     from stable_baselines3.common.atari_wrappers import (
-        WarpFrame, MaxAndSkipEnv, ClipRewardEnv, NoopResetEnv,
+        WarpFrame, MaxAndSkipEnv, ClipRewardEnv,
     )
 
     def _mk(rank):
         def _f():
-            env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
-            env = JoypadSpace(env, SIMPLE_MOVEMENT)
+            inner = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
+            inner = JoypadSpace(inner, SIMPLE_MOVEMENT)
+            env = GymV21CompatibilityV0(env=inner)
             env = MaxAndSkipEnv(env, skip=4)
             env = WarpFrame(env, width=84, height=84)
             env = ClipRewardEnv(env)
-            env.seed(seed + rank)
             return env
         return _f
 
@@ -116,6 +118,7 @@ def cmd_rollout(args):
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import VecFrameStack, DummyVecEnv
     from stable_baselines3.common.atari_wrappers import WarpFrame, MaxAndSkipEnv
+    from shimmy import GymV21CompatibilityV0
     import gym_super_mario_bros
     from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
     from nes_py.wrappers import JoypadSpace
@@ -125,16 +128,16 @@ def cmd_rollout(args):
 
     summary = []
     for ep in range(args.n_episodes):
-        # raw env so we can capture the FULL 240×256×3 RGB frame for the dataset,
-        # plus a parallel preprocessed env (84×84 stack) for the policy input.
+        # raw env stays in old-gym API so we can read .ram and step manually
         raw_env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
         raw_env_js = JoypadSpace(raw_env, SIMPLE_MOVEMENT)
-        # build the policy-input env separately by applying same wrappers
-        pol_env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
-        pol_env_js = JoypadSpace(pol_env, SIMPLE_MOVEMENT)
-        pol_env_js = MaxAndSkipEnv(pol_env_js, skip=4)
-        pol_env_js = WarpFrame(pol_env_js, width=84, height=84)
-        venv = VecFrameStack(DummyVecEnv([lambda: pol_env_js]), n_stack=4)
+        # policy-side env: same wrappers but shimmy-bridged to gymnasium
+        pol_inner = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
+        pol_inner = JoypadSpace(pol_inner, SIMPLE_MOVEMENT)
+        pol_env = GymV21CompatibilityV0(env=pol_inner)
+        pol_env = MaxAndSkipEnv(pol_env, skip=4)
+        pol_env = WarpFrame(pol_env, width=84, height=84)
+        venv = VecFrameStack(DummyVecEnv([lambda: pol_env]), n_stack=4)
 
         raw_obs = raw_env_js.reset()
         pol_obs = venv.reset()
