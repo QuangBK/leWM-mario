@@ -27,15 +27,25 @@ stage() {
 
 # Common args
 RAW=/workspace/data/tas_full
+BLK=/workspace/data/tas_blocked
 PRE=/workspace/data/tas_precomputed
 BASE_CKPT=/workspace/ckpt/best.pt
 JOINT_CKPT=/workspace/ckpt/joint_best.pt
 
-# === 1. precompute ===
-if [ ! -d "$PRE" ] || [ "$(ls "$PRE" 2>/dev/null | wc -l)" -lt 100 ]; then
+# === 1a. build blocked dataset (per-frame 8-d actions → per-block 40-d) ===
+if [ ! -d "$BLK" ] || [ "$(ls "$BLK"/*.npz 2>/dev/null | wc -l)" -lt 100 ]; then
+  stage build_blocked_dataset
+  python3 /workspace/lewm_mario_pkg/build_lewm_mario_dataset.py \
+    --dataset-root "$RAW" \
+    --output-dir "$BLK" \
+    --frame-skip 5 2>&1 | tee /workspace/runs/build_blocked.log | tail -30
+fi
+
+# === 1b. precompute resize (240×256 → 224×224) on the blocked dataset ===
+if [ ! -d "$PRE" ] || [ "$(ls "$PRE"/*.npz 2>/dev/null | wc -l)" -lt 100 ]; then
   stage precompute_dataset
   python3 /workspace/lewm_mario_pkg/precompute_mario_dataset.py \
-    --dataset-root "$RAW" \
+    --dataset-root "$BLK" \
     --output-dir "$PRE" \
     --image-size 224 2>&1 | tee /workspace/runs/precompute.log | tail -50
 fi
@@ -167,14 +177,18 @@ python3 ppo_expert.py rollout \
 
 # === 11. combined dataset Phase 1 retrain (ViT-tiny) ===
 stage combined_phase1
-mkdir -p /workspace/data/combined_full /workspace/data/combined_precomputed
+mkdir -p /workspace/data/combined_full /workspace/data/combined_blocked /workspace/data/combined_precomputed
 # symlink raw episodes from both sources
 for f in "$RAW"/*.npz /workspace/data/ppo_full/*.npz; do
   [ -e "$f" ] || continue
   ln -sf "$f" /workspace/data/combined_full/$(basename "$f")
 done
-python3 /workspace/lewm_mario_pkg/precompute_mario_dataset.py \
+python3 /workspace/lewm_mario_pkg/build_lewm_mario_dataset.py \
   --dataset-root /workspace/data/combined_full \
+  --output-dir /workspace/data/combined_blocked \
+  --frame-skip 5 2>&1 | tee /workspace/runs/combined_build.log | tail -30
+python3 /workspace/lewm_mario_pkg/precompute_mario_dataset.py \
+  --dataset-root /workspace/data/combined_blocked \
   --output-dir /workspace/data/combined_precomputed \
   --image-size 224 2>&1 | tee /workspace/runs/combined_precompute.log | tail -30
 
