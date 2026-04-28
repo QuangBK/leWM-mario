@@ -172,4 +172,21 @@ The bigger encoder (Exp 3) and the joint+horizon=8 combo both regress, suggestin
 **Combined-data ckpts and videos (HF, private):** https://huggingface.co/obamaTeo/lewm-mario/tree/main/phase3
 - `phase3/combined_phase1_best.pt` (217 MB) — Phase 1 retrain on 210-episode TAS+PPO union
 - `phase3/combined_joint_best.pt` (73 MB) — joint v2 on combined data, val/loss=0.27
-- `phase3/eval_combined_joint/combined_joint_ep_0{0..3}.mp4` — 4 sample autonomous-play videos, 12-episode summary JSON
+- `phase3/eval_combined_joint/combined_joint_ep_0{0..3}.mp4` — 4 sample autonomous-play videos at the 80-block cap (≈13 s each), 12-episode summary JSON
+- `phase3/eval_combined_joint_long/combined_joint_long_ep_0{0..3}.mp4` — same ckpt re-evaled at 1000-block cap (≈45-60 s, run until Mario actually dies). Best video reaches x=1138.
+
+## Note on the 80-block cap
+
+Every cell in the comparison table above was measured at `--total-blocks 80` (≈13 s of game time after spawn). For most variants, **most episodes were still alive at the cap** — `final_lives=2, blocks_executed=80` is the dominant pattern in the JSONs. The numbers are conservative.
+
+Re-evaluating combined_joint at `--total-blocks 1000` (run until death/timeout) tells a much richer story:
+
+| Metric | combined_joint @ 80 blocks | combined_joint @ 1000 blocks |
+|---|---|---|
+| mean x_progress | 521 | **861** |
+| median | 558 | 803 |
+| max x_progress | 682 | **1625** |
+| max final_x | 722 | **1665** |
+| episodes ending early (true death) | 7/12 | 12/12 (all run to death) |
+
+ep 10 ran for **830 blocks** (≈40 s game time) before Mario finally died at x=1665 — well past anything the 80-block-cap eval could see. So the 80-block headline numbers in the campaign table are useful for **relative comparison** (apples-to-apples across variants) but **understate absolute reach** by ~50-200%. Per-variant true means at a 1000-block cap would likely all be 1.5-2× higher.
