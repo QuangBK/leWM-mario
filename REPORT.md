@@ -174,6 +174,7 @@ The bigger encoder (Exp 3) and the joint+horizon=8 combo both regress, suggestin
 - `phase3/combined_joint_best.pt` (73 MB) — joint v2 on combined data, val/loss=0.27
 - `phase3/eval_combined_joint/combined_joint_ep_0{0..3}.mp4` — 4 sample autonomous-play videos at the 80-block cap (≈13 s each), 12-episode summary JSON
 - `phase3/eval_combined_joint_long/combined_joint_long_ep_0{0..3}.mp4` — same ckpt re-evaled at 1000-block cap (≈45-60 s, run until Mario actually dies). Best video reaches x=1138.
+- `phase3/joint_h8_best.pt` (73 MB) and `phase3/eval_joint_h8/joint_h8_ep_0{0..3}.mp4` — joint v2 fine-tuned from `combined_joint_best.pt` with `--horizon 8` reward target (12 epochs), evaluated at CEM horizon=8 with 1000-block cap.
 
 ## Note on the 80-block cap
 
@@ -190,3 +191,21 @@ Re-evaluating combined_joint at `--total-blocks 1000` (run until death/timeout) 
 | episodes ending early (true death) | 7/12 | 12/12 (all run to death) |
 
 ep 10 ran for **830 blocks** (≈40 s game time) before Mario finally died at x=1665 — well past anything the 80-block-cap eval could see. So the 80-block headline numbers in the campaign table are useful for **relative comparison** (apples-to-apples across variants) but **understate absolute reach** by ~50-200%. Per-variant true means at a 1000-block cap would likely all be 1.5-2× higher.
+
+## Follow-up: train for the eval horizon (joint_h8)
+
+The Exp-2 lesson predicted that training with a horizon-matched reward target should unlock long-horizon planning at eval time. Tested it directly: fine-tune from `combined_joint_best.pt` with `joint_finetune_v2.py --horizon 8` (12 epochs, lr 2e-5, same composite reward weights) and eval at CEM horizon=8 with `--total-blocks 1000 --n-samples 256`.
+
+| Metric | combined_joint h=4 ckpt @ h=4 eval | **joint_h8 ckpt @ h=8 eval** |
+|---|---|---|
+| mean x_progress | 861 | 710 |
+| **median** | 803 | **858** |
+| max | **1625** | 1086 |
+| episodes that converged to a single x | 0 | 6/12 (all hit x=898) |
+| episodes ending early (death) | 12/12 | 6/12 |
+
+The horizon-matched training did exactly what the Exp-2 hypothesis predicted: **the predictor stayed accurate at h=8** (no compounding error, no regression like the joint_v2_score+h=8 cross from the campaign table). Median jumped to 858 — half the episodes converge to the same `x=898` attractor and stay alive at the 1000-block cap.
+
+What it gave up: peak. The h=4 model occasionally takes a risky long-range path that pays off (max=1625) or dies trying. The h=8 model sees an 8-block-ahead pit at x≈898 and correctly *parks* there — safer, but never breaks through to the late-level corridor. Different tradeoff from h=4.
+
+So the Exp-2 lesson holds — *and* it has a cost. Training a model to plan further ahead also makes it more conservative. To get both peak max and long-horizon reliability you'd want either a horizon-mixed loss (sum reward at h=2, h=4, h=8 with equal weight) or a curiosity / risk bonus on top of the long-horizon reward.
