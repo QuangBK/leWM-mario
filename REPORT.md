@@ -209,3 +209,39 @@ The horizon-matched training did exactly what the Exp-2 hypothesis predicted: **
 What it gave up: peak. The h=4 model occasionally takes a risky long-range path that pays off (max=1625) or dies trying. The h=8 model sees an 8-block-ahead pit at x≈898 and correctly *parks* there — safer, but never breaks through to the late-level corridor. Different tradeoff from h=4.
 
 So the Exp-2 lesson holds — *and* it has a cost. Training a model to plan further ahead also makes it more conservative. To get both peak max and long-horizon reliability you'd want either a horizon-mixed loss (sum reward at h=2, h=4, h=8 with equal weight) or a curiosity / risk bonus on top of the long-horizon reward.
+
+## Three more probes (the x=898 plateau)
+
+The joint_h8 model parks at x=898 — the tall pipe in 1-1 — because its 8-block reward target correctly predicts a pit just past it and prefers safety. Three quick fixes were tried, all evaluated at `--total-blocks 1000` for 12 episodes vs the same baselines.
+
+| Variant | mean | median | max | min | Notes |
+|---|---|---|---|---|---|
+| **combined_joint @ h=4** (baseline reference) | **861** | 803 | **1625** | 263 | best mean & max |
+| joint_h8 @ h=8 (baseline reference) | 710 | **858** | 1086 | 259 | best median |
+| **(A) big CEM** combined_joint @ h=4, n_samples 256→512, n_iters 8→12 | 563 | 264 | 1390 | 259 | more exploration → more first-Goomba deaths |
+| **(B1) stuck-detector** combined_joint @ h=4, random 4 blocks when no Δx for 30 blocks | 656 | 682 | 1381 | 262 | random recoveries kill Mario in mid-plan |
+| **(B2) stuck-detector on joint_h8** @ h=8 | 713 | 770 | **1385** | 262 | breaks past x=898 in some runs (max +28%), but median drops |
+| **(C) joint_h12 @ h=12 + stuck-detector** | 624 | 680 | 858 | 270 | even more conservative — parks at x≈702, lowest peak of all |
+
+Each idea taken individually:
+
+**(A) Bigger CEM, n_samples=512 + n_iters=12.** Richer search over plans. **Hurts the median** sharply (264 vs 803): with more exploration the planner samples more aggressive plans, which more often die at the first Goomba. Mean drops too. Big CEM is a wash without a corresponding risk control.
+
+**(B1) Stuck-detector + random recovery, on combined_joint @ h=4.** Fires `recover_blocks=4` of randomly-sampled actions from the 192-action library when the last 30 blocks haven't moved Mario >5 px. **Net negative** here because the combined_joint model doesn't actually have a single-attractor problem (its episodes die at varied positions); the recovery randomly walks Mario into pits. Median drops from 803 → 682.
+
+**(B2) Stuck-detector on joint_h8 @ h=8.** This is the *one model where the diagnosis fits* — joint_h8 truly does converge on x=898. Stuck-detector breaks through in some episodes (**max 1086 → 1385**, the biggest single max improvement of the three). But median still drops slightly (858 → 770) because the random recoveries also kill some runs. Net: same mean, more variance, higher peak. Useful if you care about max reach.
+
+**(C) Train at horizon=12 with stuck-detector eval.** I expected this to push the parking point further forward, breaking through both x=898 and the next obstacle. Instead it **parks even earlier (x≈702)** and breaks through nothing. h=12 reward target → predictor is even more risk-averse than h=8 → policy refuses any sequence with predicted death anywhere in the next 12 blocks, which covers most of the level. 30+ stuck-detector recoveries per episode don't help because random walking back into the same attractor is the path of least resistance.
+
+## Takeaways
+
+- **There's a horizon sweet spot for this model + dataset.** h=4 is bold and occasionally breakthrough; h=8 is the median-best, parks at x=898; h=12 is over-conservative. Training-for-the-horizon works in the sense that it doesn't regress (Exp-2 lesson held) but the conservative inflection comes fast.
+- **Random stuck-recovery does its job for the genuinely-stuck model (joint_h8) but not for the more variable combined_joint.** The pattern matters — if the policy isn't actually parked, random actions just hurt.
+- **Bigger CEM is not a free lever.** More exploration without risk control just costs you median performance.
+- **The real next move is probably horizon-mixed training + a death-aware reward shaping** (reward staying alive in addition to Δx) so the planner learns "make progress *and* stay alive over short and long horizons" rather than collapsing into one of the two corners.
+
+## Artifacts (this round)
+
+- `phase3/joint_h12_best.pt` (73 MB) — joint v2 fine-tuned with `--horizon 12` from `combined_joint_best.pt`
+- `phase3/eval_A_bigcem/`, `phase3/eval_B_stuck/`, `phase3/eval_B2_h8stuck/`, `phase3/eval_C_h12/` — 4 sample mp4s + 12-episode JSON for each
+- `autonomous_eval_v3.py` — eval with stuck detector + random-action recovery (CLI flags `--stuck-window`, `--stuck-threshold`, `--stuck-recover-blocks`)
