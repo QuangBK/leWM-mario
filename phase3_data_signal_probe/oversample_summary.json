@@ -1,0 +1,56 @@
+[
+  {
+    "x_start": 40,
+    "x_final": 736,
+    "x_progress": 696,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 32,
+    "video": "/workspace/runs/probe_oversample/eval/probe_oversample_ep_00.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 316,
+    "x_progress": 276,
+    "blocks_executed": 24,
+    "final_lives": 2,
+    "n_stuck_recoveries": 0,
+    "video": "/workspace/runs/probe_oversample/eval/probe_oversample_ep_01.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 1130,
+    "x_progress": 1090,
+    "blocks_executed": 809,
+    "final_lives": 2,
+    "n_stuck_recoveries": 22,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 594,
+    "x_progress": 554,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 32,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 719,
+    "x_progress": 679,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 31,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 1129,
+    "x_progress": 1089,
+    "blocks_executed": 714,
+    "final_lives": 2,
+    "n_stuck_recoveries": 19,
+    "video": null
+  }
+]

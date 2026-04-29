@@ -1,0 +1,56 @@
+[
+  {
+    "x_start": 40,
+    "x_final": 1149,
+    "x_progress": 1109,
+    "blocks_executed": 283,
+    "final_lives": 2,
+    "n_stuck_recoveries": 4,
+    "video": "/workspace/runs/probe_baseline/eval/probe_baseline_ep_00.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 315,
+    "x_progress": 275,
+    "blocks_executed": 25,
+    "final_lives": 2,
+    "n_stuck_recoveries": 0,
+    "video": "/workspace/runs/probe_baseline/eval/probe_baseline_ep_01.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 898,
+    "x_progress": 858,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 30,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 673,
+    "x_progress": 633,
+    "blocks_executed": 294,
+    "final_lives": 2,
+    "n_stuck_recoveries": 7,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 898,
+    "x_progress": 858,
+    "blocks_executed": 291,
+    "final_lives": 2,
+    "n_stuck_recoveries": 6,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 898,
+    "x_progress": 858,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 29,
+    "video": null
+  }
+]

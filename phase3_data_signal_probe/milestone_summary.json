@@ -1,0 +1,56 @@
+[
+  {
+    "x_start": 40,
+    "x_final": 311,
+    "x_progress": 271,
+    "blocks_executed": 23,
+    "final_lives": 2,
+    "n_stuck_recoveries": 0,
+    "video": "/workspace/runs/probe_milestone/eval/probe_milestone_ep_00.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 311,
+    "x_progress": 271,
+    "blocks_executed": 23,
+    "final_lives": 2,
+    "n_stuck_recoveries": 0,
+    "video": "/workspace/runs/probe_milestone/eval/probe_milestone_ep_01.mp4"
+  },
+  {
+    "x_start": 40,
+    "x_final": 898,
+    "x_progress": 858,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 30,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 721,
+    "x_progress": 681,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 30,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 722,
+    "x_progress": 682,
+    "blocks_executed": 108,
+    "final_lives": 2,
+    "n_stuck_recoveries": 1,
+    "video": null
+  },
+  {
+    "x_start": 40,
+    "x_final": 722,
+    "x_progress": 682,
+    "blocks_executed": 1000,
+    "final_lives": 2,
+    "n_stuck_recoveries": 31,
+    "video": null
+  }
+]

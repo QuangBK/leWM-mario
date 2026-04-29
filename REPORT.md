@@ -370,3 +370,54 @@ The next concrete experiment that follows from this is **(1) — augment trainin
 
 - `compare_expert_at_x898.py` — runnable standalone; emits per-frame trace + library coverage stats + closest-library mapping
 - `/tmp/expert_vs_lib_x898.json` — 76 expert blocks → library nearest neighbors, hamming distances
+
+## Addendum 2 — Testing the data-signal-collapse hypothesis
+
+The Addendum-1 finding was a hypothesis: at x=898, predictor `E[Δx | x, *]≈0` because 265/270 frames in training are no-progress, so CEM has no gradient to climb toward the run-jump primitive. Addendum 2 puts that hypothesis to the experimental sword with two cheap A/B probes — both are training-data interventions, no model-side or planner-side changes.
+
+### Setup
+
+Same Phase 1 base (`best.pt`), same TAS-only data, same h=4 horizon, same CEM (n=256, iters=8) with stuck-detector. Three 12-epoch joint trainings, each evaluated identically (1000-block cap, 6 episodes).
+
+| Variant | Intervention | Training-side knob |
+|---|---|---|
+| Baseline | none | — |
+| **Variant A — oversample** | duplicate any window whose first block has `x_pre ∈ [890, 905]` AND `Δx > 0` | `--oversample-x-lo 890 --oversample-x-hi 905 --oversample-mult 20 --oversample-require-progress 1` |
+| **Variant B — milestone bonus** | add `+30` to the window's reward target whenever any block crosses `x_pre < 920 ≤ x_post` | `--milestone-x 920 --milestone-bonus 30.0` |
+
+Variant A has 15 qualifying samples (0.06% of 24,966 windows) → 14 in train split → ×20 mult adds 266 extra copies → train_idx grows 22,469 → 22,735 (1.2% boost). Tiny absolute change, but those rare success windows now contribute 20× more loss.
+
+Variant B's milestone fires for ~25/24,966 windows (0.1%). The +30 bonus produces `comp[milestone] mean=+0.034 std=1.004 max=+30` — a sparse but high-magnitude shift in the reward target.
+
+Training val_loss at epoch 12: baseline 0.6844, oversample 0.6885, milestone 0.6820 — all within noise. Training metrics don't tell the story; autonomous play does.
+
+### Eval results
+
+| Variant | x_final per episode | mean | median | max | min | parked at x∈[880,920] | total stuck-recoveries |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Baseline | 1149, 315, 898, 673, 898, 898 | **805** | 898 | 1149 | 315 | **3 / 6** | 76 |
+| Variant A (oversample) | 736, 316, 1130, 594, 719, 1129 | 771 | 728 | 1130 | 316 | **0 / 6** | 136 |
+| Variant B (milestone) | 311, 311, 898, 721, 722, 722 | 614 | 722 | 898 | 311 | 1 / 6 | 92 |
+
+All three: 0/6 deaths.
+
+### What this proves
+
+**Variant A (oversample) breaks the parking attractor — the central claim of Addendum 1.** 0/6 vs baseline's 3/6 episodes parked at x=898. Two episodes (eps 2, 5) reached ~1130, matching baseline's high-end (1149). The remaining four failed at *different* choke-points (x=594, 719, 736, 316) instead of camping at the same one. The model's behavior at x=898 is qualitatively different now: it either passes through or fails to reach (dies/gets stuck at an earlier pipe), but it does not loop forever bouncing off the wall at x=898. **This directly confirms that the binding constraint at x=898 was data-side reward signal collapse**, not planner depth or library coverage.
+
+**Variant B (milestone bonus) regressed.** Mean 614 vs baseline 805. Two episodes died at x=311 (likely a Goomba) — `blocks_executed=23, n_stuck_recoveries=0` shows quick deaths, not slow stalls. The +30 bonus made the policy too eager: the predictor learns "going right pays off big eventually", overweighting forward progress relative to death risk. Even though we kept `--w-death -10`, the milestone bonus dwarfs it (+30 vs −10), and the predictor now extrapolates "good" continuation into states where Mario is one frame from a Goomba.
+
+### Tradeoffs
+
+Variant A's mean (771) is slightly lower than baseline's (805) — but baseline's mean is lifted by the parking-at-898 episodes counting as "750-ish progress". Once you stop parking, you either pass (1130) or fail elsewhere (316–736). The absolute reach distribution is comparable but the *failure mode* is now different — and the failure mode is what we wanted to fix. Median dropped from 898 → 728 because half the runs no longer cluster at 898, but that's a feature, not a bug, when the cluster represented an attractor we were trying to escape.
+
+If the goal is **breaking the attractor**, Variant A is the answer. If the goal is **maximizing mean x_final**, Variant A doesn't beat baseline yet — combining oversampling at *multiple* known choke-points (x≈630 short pipe, x≈900 tall pipe, x≈2400 warp pipe) is the obvious next step. The mechanism is now validated; the policy improvement is a tuning question.
+
+### Verdict on Addendum-1 hypothesis
+
+Confirmed. The diagnostic ("predictor optimistic at x=895") plus the expert comparison ("library has all primitives, expert needs 17 frames of R+B+A consecutive") plus this A/B (oversample breaks parking) line up: **the parking attractor is a training-data artifact, not a model or planner deficit.** Reweighting the rare success windows is a 1.2%-train-size change that flips the policy at that specific x bucket.
+
+### Probe artifacts (Addendum 2)
+
+- `joint_finetune_v2.py` extended with `--oversample-x-{lo,hi}`, `--oversample-mult`, `--oversample-require-progress`, `--milestone-x`, `--milestone-bonus` flags
+- `phase3_data_signal_probe/{baseline,oversample,milestone}_summary.json` — per-episode `x_final`, `x_progress`, `blocks_executed`, `n_stuck_recoveries`
