@@ -245,3 +245,50 @@ Each idea taken individually:
 - `phase3/joint_h12_best.pt` (73 MB) — joint v2 fine-tuned with `--horizon 12` from `combined_joint_best.pt`
 - `phase3/eval_A_bigcem/`, `phase3/eval_B_stuck/`, `phase3/eval_B2_h8stuck/`, `phase3/eval_C_h12/` — 4 sample mp4s + 12-episode JSON for each
 - `autonomous_eval_v3.py` — eval with stuck detector + random-action recovery (CLI flags `--stuck-window`, `--stuck-threshold`, `--stuck-recover-blocks`)
+
+## Diagnostic + 5 more probes (2026-04-29)
+
+Wrote `diagnose_x898.py` to probe what `joint_h8` actually predicts at the parking position. Drove Mario to x=895 with the model's own CEM, then scored every action library entry as a constant 8-block plan and ran full CEM at that state.
+
+**Result was surprising:** at x=895 the predictor isn't conservative at all — it's *optimistic*. Library actions get predicted-reward distribution `min=-40, median=+328, max=+1351`; full CEM picks a plan it predicts will yield total reward **+1391**. But in the actual env Mario doesn't move. So the parking is from a **predictor-env mismatch**: the model hallucinates favorable futures from the x=895 state, executes the plan, the env doesn't deliver the predicted Δx, the new state is "still at x=895", CEM plans again on the same hallucinated optimism, repeat forever. The training distribution probably contains very few `(state at x≈900, suboptimal action) → (next state)` examples, so the model extrapolates hopefully OOD.
+
+This rules out the "predictor sees death and parks defensively" framing the previous round used. The actual issue is **OOD prediction overconfidence** at x>900.
+
+Tested five fixes against this:
+
+| Variant | mean | median | max | Notes |
+|---|---|---|---|---|
+| baseline combined_joint @ h=4 | 861 | 803 | 1625 | reference |
+| baseline joint_h8 @ h=8 | 710 | 858 | 1086 | reference |
+| **(1) death-aware** w_alive=1, h=8 + stuck | 790 | 682 | **1904** | **new campaign max** |
+| (2) horizon-mixed (h=4,8,12 averaged) + stuck | 530 | 651 | 858 | worst — averaging hallucinations |
+| (3) composite reward + combined + h=8 + stuck | 601 | 663 | 1098 | mid-pack |
+| (4) past-actions in CEM context, combined_joint h=4 + stuck | 694 | 682 | 1086 | no help |
+| (5) past-actions in CEM context, joint_h8 h=8 + stuck | 609 | 665 | 858 | no help |
+
+**(1) Death-aware shaping (w_alive=1 added per surviving block in window, h=8):** counterintuitive winner. Adding an alive bonus made the model *more* willing to park (it gets free reward for not dying), so without stuck-detector this would be worse. But combined with the stuck-detector (which fires when Mario hasn't moved in 30 blocks), random recoveries blast Mario out of the attractor at much higher rate than usual; once free, the predictor competently runs forward and reached x=1944 (`max_final_x`). The alive bonus + frequent recovery is a synergy: parking is rewarded ⇒ heavy stuck-detector use ⇒ many escape attempts ⇒ occasionally one of them finds the gap and the model rides it far. 182 recoveries across 12 episodes — heavy use, but it works.
+
+**(2) Horizon-mixed (target = average of single-horizon targets at h=4, 8, 12):** worst result. Averaging the same predictor's hallucinations at multiple horizons doesn't fix the OOD overconfidence — it just averages it. The predictor still says "go forward, it'll be great" at x=895 across all three horizons.
+
+**(3) Composite reward + combined data + h=8:** Δx + score + coins + ptype + death penalty, joint trained at h=8. Mid-pack. The composite reward signal is dominated by Δx in our dataset (other components are sparse), and h=8 conservatism still parks at x=898.
+
+**(4)/(5) Past-actions in CEM context (`autonomous_eval_v4.py`):** Hypothesis was that the CEM's first-step `ctx_act = zero-pad` was OOD vs training (where past-action context was always real button presses), causing the optimistic prediction. Fixed by tracking executed actions and prepending them. **Hypothesis was wrong** — both ckpts still parked. So zero-padding isn't the cause; the OOD overconfidence is more fundamental.
+
+## Final headline
+
+**Best campaign result so far: alive bonus + stuck-detector at h=8.** Max final_x = 1944 (>60% of the SMB1 1-1 level length of ~3160). Mean 790 over 12 episodes. The model still doesn't reliably *clear* the level — it relies on the stochastic stuck-detector to break the parking attractor — but it does occasionally run very far when the stochastic kick lands well.
+
+The training-side problem the diagnostic surfaced (OOD predictor overconfidence past x=900) is the real binding constraint, and none of the five tested fixes address it directly. The honest next moves would be:
+1. **Curriculum PPO**: train PPO that *starts* from x≈800 (env snapshot) so it learns to clear the pipe via random exploration; add those rollouts to combined data. Target: dense state-action coverage past x=900.
+2. **Predictor uncertainty regularization**: add an entropy-of-prediction or ensemble-disagreement term to penalize confident OOD predictions.
+3. **Hierarchical planning**: separate "where do I want to be in 30 blocks" goal selection from "what 4-block plan reaches there" execution.
+
+These are bigger-investment swings than the eval-side hacks tried here.
+
+## Artifacts (this round)
+
+- `diagnose_x898.py` and `phase3/diagnose_x898.json` — the OOD-overconfidence diagnostic  
+- `phase3/joint_alive_best.pt`, `phase3/joint_mixedh_best.pt`, `phase3/joint_composite_best.pt` — the three new joint ckpts
+- `phase3/eval_alive/`, `phase3/eval_mixedh/`, `phase3/eval_composite/`, `phase3/eval_pastact_h4/`, `phase3/eval_pastact_h8/` — 4 sample mp4s + 12-ep JSON each
+- `autonomous_eval_v4.py` — past-actions CEM (the hypothesis-driven fix that didn't pan out, kept for reproducibility)
+- `joint_finetune_v2.py` extended with `--w-alive` (death-aware shaping) and `--multi-horizons` (horizon-mixed loss) flags
