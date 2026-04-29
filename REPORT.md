@@ -292,3 +292,81 @@ These are bigger-investment swings than the eval-side hacks tried here.
 - `phase3/eval_alive/`, `phase3/eval_mixedh/`, `phase3/eval_composite/`, `phase3/eval_pastact_h4/`, `phase3/eval_pastact_h8/` — 4 sample mp4s + 12-ep JSON each
 - `autonomous_eval_v4.py` — past-actions CEM (the hypothesis-driven fix that didn't pan out, kept for reproducibility)
 - `joint_finetune_v2.py` extended with `--w-alive` (death-aware shaping) and `--multi-horizons` (horizon-mixed loss) flags
+
+## Addendum — expert vs. our action library at x=898
+
+User asked: *compare the expert TAS's actions at x=898 to what our model picks there, maybe an insight is hiding*. Probe lives in `compare_expert_at_x898.py` — replays one warpless TAS through `nes_py`, slices the [850, 950] x window, prints per-frame and per-block button signatures, and maps every expert block to its nearest entry in our action library (Hamming over the 40-bit blocked vector).
+
+**Replay used:** `traces/SMB_AISSON_warpless.fm2` (the only TAS in our pool that cleanly resyncs through the tall pipe; most others desync earlier).
+
+### Result 1 — the library is NOT the bottleneck
+
+| | |
+|---|---|
+| Expert blocks in window x∈[850,950] | 76 |
+| Expert blocks **exactly present** in our library (Hamming = 0) | **71 / 76 (93%)** |
+| Worst block-level distance | 2 / 40 bits |
+| Library entries with `A` held all 5 frames (long-jump primitive) | 90 / 1199 (7.5%) |
+| Library entries with `R+A` held all 5 frames (run-jump) | 17 / 1199 (1.4%) |
+| Library entries with `A`≥4 frames AND `R`≥3 frames (sustained run-jump) | **76 / 1199 (6.3%)** |
+
+The exact 5-frame block the expert uses to cross the pipe — `[R+B+A R+B+A R+B+A R+B+A R+B+A]` — is in the library (entry #181, #375, plus several near-duplicates). So "the action library doesn't contain the right primitive" is **falsified**.
+
+### Result 2 — even the expert TAS spends 4.5 seconds at x=898
+
+Per-frame trace through the pipe shows Mario's actual progress:
+
+```
+frame 2614  x=899  R+B          ← first contact, 1-pixel into pipe
+frame 2615  x=898  R+B          ← shoved back to 898
+…
+frame 2615–2885  x stays at 898 for ALL 270 frames (4.5 s)
+…
+frame 2884  x=899  R+B          ← finally clears, 270 frames after first contact
+```
+
+What happened in those 270 frames:
+
+| Block category | count |
+|---|---|
+| `R+B` only at x=898 (running into the wall, no jump) | 35 |
+| `R+B+A` at x=898 (run-jump but failed to clear) | 11 |
+| `B+A` only at x=898 (jump in place, no R) | 5 |
+| `R+B+A` at x=898 → x=899 (the successful crossing) | **17 consecutive frames** |
+| post-pipe motion blocks | 18 |
+
+The expert TAS made **two** R+B+A attempts before the third one succeeded:
+
+1. Frames 2755–2769: 15 consecutive R+B+A frames → x peaks at 899 for one frame, lands back on 898
+2. Frames 2815–2820: 6 consecutive R+B+A frames → no progress
+3. Frames 2867–2883: **17 consecutive R+B+A frames** → finally clears
+
+The difference between fail and success was **2 extra frames of `A` held**. The maneuver is genuinely tight in SMB1 1-1 physics.
+
+### Result 3 — the implication for our model
+
+This reframes the parking attractor:
+
+- The action primitive is in the library (Result 1).
+- The maneuver requires **17 frames of consecutive `R+B+A`** = 3.4 of our 5-frame blocks. That's **inside h=4 horizon** and well inside h=8.
+- But CEM has to find a 3-block contiguous `R+B+A` plan among 1199 possible library entries with elite_frac=0.1 starting from a uniform prior. The probability of one random plan having 3+ consecutive R+B+A blocks is `(76/1199)³ ≈ 2.6×10⁻⁴`. With n_samples=256, the expected number of "good" candidates per CEM iteration is ~0.07 — most iterations see *zero*.
+- And critically: **even when CEM does sample R+B+A blocks, the predictor at x=898 says `predicted Δx = small positive` regardless** (Result confirmed by the earlier diagnostic — distribution at x≈895 was median +328, max +1351 across all library entries; nothing stood out as obviously better than baseline). So the predictor offers **no gradient** for CEM to climb toward the 17-frame R+B+A solution.
+
+The training data explains the predictor flatness: of the 270 frames the expert spends at x=898 in our training TAS, **265 are non-progress frames** (R+B into the wall, B+A in place, …). So the predictor sees mostly "x=898 → tiny or zero Δx" regardless of action — it learns `E[Δx | x=898, *] ≈ 0`. The 5 successful frames are statistical noise to it.
+
+### What this rules out and what's left
+
+- **Falsified**: "library doesn't have the right primitive" (it does).
+- **Falsified**: "horizon too short to fit the maneuver" (3.4 blocks fits inside h=4).
+- **Falsified earlier**: "predictor sees death past pipe and parks defensively" (predictor is *optimistic*, not pessimistic).
+- **Still on the table** as plausible binding constraints:
+  1. **Reward signal collapse at x=898 in training data** — the predictor's `Δx | x=898, action` distribution is nearly uniform, so CEM has no gradient. Fix: per-state reward normalization, or train on PPO rollouts that contain *successful* x=898 traversals.
+  2. **CEM's prior is uniform over the library**, and 6% R+B+A density is too thin for n_samples=256 to reliably hit a 3-consecutive-block plan. Fix: bias CEM's first iteration toward `R+B+A`-rich library entries (or 1-step BFS from the current state to seed CEM at action primitives that the predictor scores well).
+  3. **Frame-level discretization mismatch** — the expert needs 17 frames of A held; our blocks force 15 or 20. The 2-frame difference might matter at the apex.
+
+The next concrete experiment that follows from this is **(1) — augment training data with successful x=898 traversals (PPO from a pre-pipe snapshot), then re-train**. That directly attacks the only constraint we haven't yet falsified.
+
+### Probe artifacts
+
+- `compare_expert_at_x898.py` — runnable standalone; emits per-frame trace + library coverage stats + closest-library mapping
+- `/tmp/expert_vs_lib_x898.json` — 76 expert blocks → library nearest neighbors, hamming distances
