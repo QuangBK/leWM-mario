@@ -38,14 +38,22 @@ class RewardHead(nn.Module):
 class WindowDS(torch.utils.data.Dataset):
     def __init__(self, base: MarioTraceDataset, raw_root: Path, history: int,
                  horizons, w_x: float, w_score: float, w_coins: float,
-                 w_ptype: float, w_death: float, w_alive: float = 0.0):
+                 w_ptype: float, w_death: float, w_alive: float = 0.0,
+                 milestone_x: int = 0, milestone_bonus: float = 0.0):
         """horizons can be a single int or a list of ints (multi-horizon mix).
         For multi-horizon, the target is the SUM of single-horizon targets across
-        each listed horizon, equally weighted."""
+        each listed horizon, equally weighted.
+
+        milestone_x / milestone_bonus: if a block in the window crosses x_pre <
+        milestone_x <= x_post, add `milestone_bonus` to the target. Used to
+        amplify the reward signal at known choke-points (e.g. tall pipe at x=898).
+        """
         self.base = base; self.history = history
         if isinstance(horizons, int):
             horizons = [horizons]
         self.horizons = horizons
+        self.milestone_x = int(milestone_x)
+        self.milestone_bonus = float(milestone_bonus)
         cache = {}
         for ep in self.base.episodes:
             with np.load(Path(raw_root) / f"{ep.name}.npz", allow_pickle=False) as d:
@@ -58,20 +66,28 @@ class WindowDS(torch.utils.data.Dataset):
                     "ptype": np.asarray(d["ptype"]) if "ptype" in fields else np.zeros_like(d["x_pos"]),
                 }
 
+        ms_x = self.milestone_x; ms_b = self.milestone_bonus
         def single_horizon_target(ar, first_block, H):
             total, died = 0.0, False
             blocks_alive = 0
-            comps_local = {"x": 0.0, "score": 0.0, "coins": 0.0, "ptype": 0.0, "death": 0.0, "alive": 0.0}
+            comps_local = {"x": 0.0, "score": 0.0, "coins": 0.0, "ptype": 0.0,
+                           "death": 0.0, "alive": 0.0, "milestone": 0.0}
             for k in range(H):
                 blk = first_block + k
                 i_pre  = blk * BLOCK
                 i_post = min((blk + 1) * BLOCK, len(ar["x"]) - 1)
                 if i_pre >= len(ar["x"]): break
-                dx     = float(ar["x"][i_post])     - float(ar["x"][i_pre])
+                x_pre  = float(ar["x"][i_pre])
+                x_post = float(ar["x"][i_post])
+                dx     = x_post - x_pre
                 dscore = float(ar["score"][i_post]) - float(ar["score"][i_pre])
                 dcoins = float(ar["coins"][i_post]) - float(ar["coins"][i_pre])
                 dptype = float(ar["ptype"][i_post]) - float(ar["ptype"][i_pre])
                 r = w_x*dx + w_score*dscore + w_coins*dcoins + w_ptype*dptype + w_alive
+                # milestone bonus: block crosses milestone_x in this 5-frame window
+                if ms_x > 0 and x_pre < ms_x <= x_post:
+                    r += ms_b
+                    comps_local["milestone"] += ms_b
                 total += r
                 comps_local["x"]     += w_x*dx
                 comps_local["score"] += w_score*dscore
@@ -87,8 +103,12 @@ class WindowDS(torch.utils.data.Dataset):
                 comps_local["death"] = w_death
             return total, comps_local
 
-        targets = np.zeros(len(self.base.index), dtype=np.float32)
-        comps = {k: np.zeros(len(self.base.index)) for k in ("x","score","coins","ptype","death","alive")}
+        N = len(self.base.index)
+        targets = np.zeros(N, dtype=np.float32)
+        first_block_x_pre = np.zeros(N, dtype=np.int32)  # x at start of first predicted block
+        first_block_dx    = np.zeros(N, dtype=np.float32)  # Δx of first predicted block
+        comps_keys = ("x","score","coins","ptype","death","alive","milestone")
+        comps = {k: np.zeros(N) for k in comps_keys}
         for w, (ep_id, start) in enumerate(self.base.index):
             ar = cache[self.base.episodes[ep_id].name]
             first_block = start + history - 1
@@ -99,11 +119,19 @@ class WindowDS(torch.utils.data.Dataset):
                 for k, v in c.items():
                     comps[k][w] += v / len(self.horizons)
             targets[w] = total
+            # cache first-block x_pre and dx for downstream oversampling logic
+            i_pre  = first_block * BLOCK
+            i_post = min((first_block + 1) * BLOCK, len(ar["x"]) - 1)
+            if i_pre < len(ar["x"]):
+                first_block_x_pre[w] = int(ar["x"][i_pre])
+                first_block_dx[w]    = float(ar["x"][i_post]) - float(ar["x"][i_pre])
         self.targets = targets
+        self.first_block_x_pre = first_block_x_pre
+        self.first_block_dx    = first_block_dx
         self.mean = float(targets.mean()); self.std = float(targets.std() + 1e-6)
         print(f"reward target: mean={self.mean:.2f}  std={self.std:.2f}  horizons={self.horizons}")
         for k, v in comps.items():
-            print(f"  comp[{k:6s}]: mean={v.mean():+.2f}  std={v.std():.2f}  "
+            print(f"  comp[{k:9s}]: mean={v.mean():+.3f}  std={v.std():.3f}  "
                   f"min={v.min():+.1f}  max={v.max():+.1f}")
 
     def __len__(self): return len(self.base)
@@ -158,6 +186,21 @@ def main():
     ap.add_argument("--w-death", type=float, default=-10.0)
     ap.add_argument("--w-alive", type=float, default=0.0,
                      help="Bonus added per block survived in window (death-aware shaping).")
+    # Variant A — oversample windows whose first block falls in a parking-prone
+    # x range AND has positive Δx (rare successful-progress samples).
+    ap.add_argument("--oversample-x-lo", type=int, default=0,
+                     help="Lower bound of first-block x for oversampling (0 disables).")
+    ap.add_argument("--oversample-x-hi", type=int, default=0,
+                     help="Upper bound of first-block x for oversampling.")
+    ap.add_argument("--oversample-mult", type=int, default=1,
+                     help="Replication factor for qualifying training samples (1 = no-op).")
+    ap.add_argument("--oversample-require-progress", type=int, default=1,
+                     help="If 1, only oversample windows whose first block has Δx>0.")
+    # Variant B — milestone reward bonus for blocks that cross a target x.
+    ap.add_argument("--milestone-x", type=int, default=0,
+                     help="If a window block crosses x_pre < milestone_x <= x_post, add bonus to reward target. 0 disables.")
+    ap.add_argument("--milestone-bonus", type=float, default=0.0,
+                     help="Reward (in raw units, before normalization) added when milestone is crossed.")
     ap.add_argument("--reward-weight", type=float, default=0.5)
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--wandb-project", type=str, default="lewm-mario")
@@ -178,11 +221,35 @@ def main():
                               stride=1, npz_load_mode="lazy", max_cached_episodes=8)
     horizons_arg = [int(s) for s in args.multi_horizons.split(",")] if args.multi_horizons.strip() else args.horizon
     ds = WindowDS(base, args.raw_root, cfg.history_size, horizons_arg,
-                  args.w_x, args.w_score, args.w_coins, args.w_ptype, args.w_death, args.w_alive)
+                  args.w_x, args.w_score, args.w_coins, args.w_ptype, args.w_death, args.w_alive,
+                  milestone_x=args.milestone_x, milestone_bonus=args.milestone_bonus)
     g = torch.Generator().manual_seed(3072)
     cut = int(len(ds) * 0.9)
     perm = torch.randperm(len(ds), generator=g)
     tr_idx = perm[:cut].tolist(); va_idx = perm[cut:].tolist()
+    # Variant A: oversample training samples whose first block hits a parking-prone
+    # x range with positive Δx (rare success windows). Validation set untouched.
+    if args.oversample_x_lo > 0 and args.oversample_x_hi > 0 and args.oversample_mult > 1:
+        x_pre = ds.first_block_x_pre
+        dx0   = ds.first_block_dx
+        in_range = (x_pre >= args.oversample_x_lo) & (x_pre <= args.oversample_x_hi)
+        if args.oversample_require_progress:
+            qualifies = in_range & (dx0 > 0)
+        else:
+            qualifies = in_range
+        n_q_total = int(qualifies.sum())
+        tr_set = set(tr_idx)
+        extra = []
+        for w in np.where(qualifies)[0]:
+            if int(w) in tr_set:
+                # add (mult-1) extra copies of this index
+                extra.extend([int(w)] * (args.oversample_mult - 1))
+        n_q_train = sum(1 for w in np.where(qualifies)[0] if int(w) in tr_set)
+        tr_idx = tr_idx + extra
+        print(f"oversample: x∈[{args.oversample_x_lo},{args.oversample_x_hi}] "
+              f"require_progress={args.oversample_require_progress} mult={args.oversample_mult}")
+        print(f"  qualifying samples: {n_q_total} total, {n_q_train} in train split")
+        print(f"  added {len(extra)} extra copies; train_idx grew {len(tr_idx) - len(extra)} → {len(tr_idx)}")
     tr_sampler = EpisodeBatchSampler(tr_idx, base.index, args.batch_size, True, True, 3072)
     va_sampler = EpisodeBatchSampler(va_idx, base.index, args.batch_size, False, False, 3072)
     tr_loader = DataLoader(ds, batch_sampler=tr_sampler, num_workers=args.num_workers,
@@ -273,6 +340,10 @@ def main():
             "horizon": args.horizon, "horizons": ds.horizons,
             "weights": {"x": args.w_x, "score": args.w_score, "coins": args.w_coins,
                         "ptype": args.w_ptype, "death": args.w_death, "alive": args.w_alive},
+            "milestone": {"x": args.milestone_x, "bonus": args.milestone_bonus},
+            "oversample": {"x_lo": args.oversample_x_lo, "x_hi": args.oversample_x_hi,
+                            "mult": args.oversample_mult,
+                            "require_progress": args.oversample_require_progress},
             "action_library": ck["action_library"],
             "val_metrics": val_metrics, "train_metrics": train_metrics,
         }
