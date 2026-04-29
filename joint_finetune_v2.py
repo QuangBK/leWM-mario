@@ -37,9 +37,15 @@ class RewardHead(nn.Module):
 
 class WindowDS(torch.utils.data.Dataset):
     def __init__(self, base: MarioTraceDataset, raw_root: Path, history: int,
-                 horizon: int, w_x: float, w_score: float, w_coins: float,
-                 w_ptype: float, w_death: float):
-        self.base = base; self.history = history; self.horizon = horizon
+                 horizons, w_x: float, w_score: float, w_coins: float,
+                 w_ptype: float, w_death: float, w_alive: float = 0.0):
+        """horizons can be a single int or a list of ints (multi-horizon mix).
+        For multi-horizon, the target is the SUM of single-horizon targets across
+        each listed horizon, equally weighted."""
+        self.base = base; self.history = history
+        if isinstance(horizons, int):
+            horizons = [horizons]
+        self.horizons = horizons
         cache = {}
         for ep in self.base.episodes:
             with np.load(Path(raw_root) / f"{ep.name}.npz", allow_pickle=False) as d:
@@ -51,13 +57,12 @@ class WindowDS(torch.utils.data.Dataset):
                     "coins": np.asarray(d["coins"]) if "coins" in fields else np.zeros_like(d["x_pos"]),
                     "ptype": np.asarray(d["ptype"]) if "ptype" in fields else np.zeros_like(d["x_pos"]),
                 }
-        targets = np.zeros(len(self.base.index), dtype=np.float32)
-        comps = {k: np.zeros(len(self.base.index)) for k in ("x","score","coins","ptype","death")}
-        for w, (ep_id, start) in enumerate(self.base.index):
-            ar = cache[self.base.episodes[ep_id].name]
-            first_block = start + history - 1
+
+        def single_horizon_target(ar, first_block, H):
             total, died = 0.0, False
-            for k in range(horizon):
+            blocks_alive = 0
+            comps_local = {"x": 0.0, "score": 0.0, "coins": 0.0, "ptype": 0.0, "death": 0.0, "alive": 0.0}
+            for k in range(H):
                 blk = first_block + k
                 i_pre  = blk * BLOCK
                 i_post = min((blk + 1) * BLOCK, len(ar["x"]) - 1)
@@ -66,21 +71,37 @@ class WindowDS(torch.utils.data.Dataset):
                 dscore = float(ar["score"][i_post]) - float(ar["score"][i_pre])
                 dcoins = float(ar["coins"][i_post]) - float(ar["coins"][i_pre])
                 dptype = float(ar["ptype"][i_post]) - float(ar["ptype"][i_pre])
-                r = w_x*dx + w_score*dscore + w_coins*dcoins + w_ptype*dptype
+                r = w_x*dx + w_score*dscore + w_coins*dcoins + w_ptype*dptype + w_alive
                 total += r
-                comps["x"][w]     += w_x*dx
-                comps["score"][w] += w_score*dscore
-                comps["coins"][w] += w_coins*dcoins
-                comps["ptype"][w] += w_ptype*dptype
+                comps_local["x"]     += w_x*dx
+                comps_local["score"] += w_score*dscore
+                comps_local["coins"] += w_coins*dcoins
+                comps_local["ptype"] += w_ptype*dptype
+                comps_local["alive"] += w_alive
+                blocks_alive += 1
                 if i_post < len(ar["lives"]) and i_pre < len(ar["lives"]) \
                    and int(ar["lives"][i_post]) < int(ar["lives"][i_pre]):
                     died = True; break
             if died:
-                total += w_death; comps["death"][w] = w_death
+                total += w_death
+                comps_local["death"] = w_death
+            return total, comps_local
+
+        targets = np.zeros(len(self.base.index), dtype=np.float32)
+        comps = {k: np.zeros(len(self.base.index)) for k in ("x","score","coins","ptype","death","alive")}
+        for w, (ep_id, start) in enumerate(self.base.index):
+            ar = cache[self.base.episodes[ep_id].name]
+            first_block = start + history - 1
+            total = 0.0
+            for H in self.horizons:
+                t, c = single_horizon_target(ar, first_block, H)
+                total += t / len(self.horizons)  # average across horizons
+                for k, v in c.items():
+                    comps[k][w] += v / len(self.horizons)
             targets[w] = total
         self.targets = targets
         self.mean = float(targets.mean()); self.std = float(targets.std() + 1e-6)
-        print(f"reward target: mean={self.mean:.2f}  std={self.std:.2f}  horizon={horizon}")
+        print(f"reward target: mean={self.mean:.2f}  std={self.std:.2f}  horizons={self.horizons}")
         for k, v in comps.items():
             print(f"  comp[{k:6s}]: mean={v.mean():+.2f}  std={v.std():.2f}  "
                   f"min={v.min():+.1f}  max={v.max():+.1f}")
@@ -128,11 +149,15 @@ def main():
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--horizon", type=int, default=4)
+    ap.add_argument("--multi-horizons", type=str, default="",
+                     help="Comma list of horizons to average target over, e.g. '4,8,12'. Overrides --horizon if set.")
     ap.add_argument("--w-x", type=float, default=1.0)
     ap.add_argument("--w-score", type=float, default=0.05)
     ap.add_argument("--w-coins", type=float, default=5.0)
     ap.add_argument("--w-ptype", type=float, default=20.0)
     ap.add_argument("--w-death", type=float, default=-10.0)
+    ap.add_argument("--w-alive", type=float, default=0.0,
+                     help="Bonus added per block survived in window (death-aware shaping).")
     ap.add_argument("--reward-weight", type=float, default=0.5)
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--wandb-project", type=str, default="lewm-mario")
@@ -151,8 +176,9 @@ def main():
     episodes = discover_episodes(args.dataset_root)
     base = MarioTraceDataset(episodes, cfg.history_size, cfg.num_preds, cfg.image_size,
                               stride=1, npz_load_mode="lazy", max_cached_episodes=8)
-    ds = WindowDS(base, args.raw_root, cfg.history_size, args.horizon,
-                  args.w_x, args.w_score, args.w_coins, args.w_ptype, args.w_death)
+    horizons_arg = [int(s) for s in args.multi_horizons.split(",")] if args.multi_horizons.strip() else args.horizon
+    ds = WindowDS(base, args.raw_root, cfg.history_size, horizons_arg,
+                  args.w_x, args.w_score, args.w_coins, args.w_ptype, args.w_death, args.w_alive)
     g = torch.Generator().manual_seed(3072)
     cut = int(len(ds) * 0.9)
     perm = torch.randperm(len(ds), generator=g)
@@ -179,7 +205,8 @@ def main():
     beta = args.reward_weight
 
     print(f"joint v2 train: pairs={len(ds)} train={len(tr_idx)} val={len(va_idx)} "
-          f"epochs={args.epochs} lr={args.lr} reward_weight={beta}")
+          f"epochs={args.epochs} lr={args.lr} reward_weight={beta} "
+          f"horizons={ds.horizons} w_alive={args.w_alive}")
     best_val = float("inf")
     for epoch in range(1, args.epochs + 1):
         tr_sampler.set_epoch(epoch)
@@ -239,27 +266,21 @@ def main():
                "samples_per_sec": seen / max(1e-6, elapsed), "lr": sched.get_last_lr()[0]}
         print(json.dumps(rec), flush=True)
         if wandb_run: wandb_run.log(rec, step=epoch)
-        torch.save({
+        ckpt_blob = {
             "epoch": epoch, "config": cfg.to_dict(),
             "model_state": model.state_dict(), "head_state": head.state_dict(),
             "reward_mean": ds.mean, "reward_std": ds.std,
-            "horizon": args.horizon,
+            "horizon": args.horizon, "horizons": ds.horizons,
             "weights": {"x": args.w_x, "score": args.w_score, "coins": args.w_coins,
-                        "ptype": args.w_ptype, "death": args.w_death},
+                        "ptype": args.w_ptype, "death": args.w_death, "alive": args.w_alive},
             "action_library": ck["action_library"],
             "val_metrics": val_metrics, "train_metrics": train_metrics,
-        }, args.out_dir / "latest.pt")
+        }
+        torch.save(ckpt_blob, args.out_dir / "latest.pt")
         if val_metrics["val/loss"] < best_val:
             best_val = val_metrics["val/loss"]
-            torch.save({
-                "epoch": epoch, "config": cfg.to_dict(),
-                "model_state": model.state_dict(), "head_state": head.state_dict(),
-                "reward_mean": ds.mean, "reward_std": ds.std,
-                "horizon": args.horizon,
-                "weights": {"x": args.w_x, "score": args.w_score, "coins": args.w_coins,
-                            "ptype": args.w_ptype, "death": args.w_death},
-                "action_library": ck["action_library"],
-            }, args.out_dir / "best.pt")
+            best_blob = {k: v for k, v in ckpt_blob.items() if k not in ("val_metrics","train_metrics")}
+            torch.save(best_blob, args.out_dir / "best.pt")
     print(f"saved best.pt val_loss={best_val:.4f}")
     if wandb_run: wandb_run.finish()
 
