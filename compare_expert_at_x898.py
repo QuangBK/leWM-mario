@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 import numpy as np
 from nes_py import NESEnv
 
-sys.path.insert(0, "/root/working/lewm_mario")
+sys.path.insert(0, "/root/leWM-project/lewm_mario")
 from mario_lewm.fm2 import parse_fm2, fm2_row_to_nes_action, FM2_BUTTONS
 
 GSMB_ROM = "/root/mario_rl_env/lib/python3.12/site-packages/gym_super_mario_bros/_roms/super-mario-bros.nes"
@@ -107,9 +107,9 @@ def library_stats(lib_40d):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fm2", default="/root/working/lewm_mario/traces/SMB_AISSON_warpless.fm2",
+    ap.add_argument("--fm2", default="/root/leWM-project/lewm_mario/traces/SMB_AISSON_warpless.fm2",
                     help="FM2 file to replay (warpless preferred for clean x progression)")
-    ap.add_argument("--ckpt", default="/root/working/lewm_mario_artifacts/v2_joint/joint_best.pt",
+    ap.add_argument("--ckpt", default="/root/leWM-project/lewm_mario_artifacts/v2_joint/joint_best.pt",
                     help="Joint ckpt with .action_library (Phase 2 h=4 by default — Phase 3 h=8 ckpt is on the deleted pod)")
     ap.add_argument("--max-frames", type=int, default=8000)
     ap.add_argument("--x-lo", type=int, default=850)
